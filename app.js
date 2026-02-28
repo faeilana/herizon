@@ -44,8 +44,11 @@ const PLAYABLE = {
 let state = {
   country:       null,
   scenarioIndex: 0,
-  stats: { safety: 50, confidence: 50, cultural: 50, budget: 50 }
+  stats: { safety: 50, confidence: 50, cultural: 50, budget: 50 },
+  countryContent: null
 };
+
+const DEFAULT_SCENARIO_COUNT = 4;
 
 /* ═══════════════════════════════════════════════════════════
    HELPERS
@@ -177,27 +180,174 @@ function showMapError() {
      </div>`;
 }
 
+function getActiveCountryContent() {
+  return state.countryContent || SCENARIOS[state.country];
+}
+
+function getVertexConfig() {
+  const cfg = window.HERIZON_VERTEX_CONFIG;
+  if (!cfg?.projectId || !cfg?.location || !cfg?.accessToken) return null;
+  return {
+    model: "gemini-1.5-flash",
+    ...cfg
+  };
+}
+
+function cleanText(value, fallback = "") {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function cleanEffects(effects = {}) {
+  const keys = ["safety", "confidence", "cultural", "budget"];
+  return keys.reduce((acc, key) => {
+    const v = Number(effects[key] || 0);
+    acc[key] = Number.isFinite(v) ? Math.max(-20, Math.min(20, Math.round(v))) : 0;
+    return acc;
+  }, {});
+}
+
+function normalizeScenario(raw, index, countryName) {
+  const options = Array.isArray(raw.options) ? raw.options.slice(0, 4) : [];
+  while (options.length < 4) {
+    options.push({
+      text: "Pause and choose the safest well-lit option nearby",
+      effects: { safety: 8, confidence: 3, cultural: 0, budget: -2 },
+      outcome: "You reduce uncertainty and keep control of the situation.",
+      why: "Taking a deliberate pause can lower risk in unfamiliar environments.",
+      tip: "Trust your instincts and prioritize visible, staffed, or public spaces."
+    });
+  }
+
+  return {
+    title: cleanText(raw.title, `${countryName} travel decision ${index + 1}`),
+    question: cleanText(raw.question, "What would you do next?"),
+    options: options.map((option) => ({
+      text: cleanText(option.text, "Choose a practical, low-risk next step"),
+      effects: cleanEffects(option.effects),
+      outcome: cleanText(option.outcome, "Your choice keeps your trip moving forward."),
+      why: cleanText(option.why, "Small travel decisions can meaningfully affect comfort and safety."),
+      tip: cleanText(option.tip, "Use official services and stay aware of your surroundings.")
+    }))
+  };
+}
+
+function extractJsonFromText(text) {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) return fenced[1];
+  return text;
+}
+
+async function fetchVertexCountryContent(countryCode) {
+  const cfg = getVertexConfig();
+  if (!cfg) return null;
+
+  const playable = PLAYABLE[Object.keys(PLAYABLE).find((id) => PLAYABLE[id].code === countryCode)];
+  const countryName = playable?.name || countryCode;
+  const prompt = `You are generating a women's travel simulator scenario pack for ${countryName}.
+Return strict JSON with this shape:
+{
+  "name": "${countryName}",
+  "flag": "${playable?.flag || "🌍"}",
+  "scenarios": [
+    {
+      "title": "",
+      "question": "",
+      "options": [
+        {"text":"", "effects":{"safety":0,"confidence":0,"cultural":0,"budget":0}, "outcome":"", "why":"", "tip":""}
+      ]
+    }
+  ]
+}
+Rules:
+- exactly ${DEFAULT_SCENARIO_COUNT} scenarios
+- exactly 4 options per scenario
+- each effect integer between -20 and 20
+- grounded in realistic travel contexts in ${countryName}
+- concise and practical language.`;
+
+  const endpoint = cfg.endpoint || `https://${cfg.location}-aiplatform.googleapis.com/v1/projects/${cfg.projectId}/locations/${cfg.location}/publishers/google/models/${cfg.model}:generateContent`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${cfg.accessToken}`
+    },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: cfg.temperature ?? 0.8,
+        maxOutputTokens: cfg.maxOutputTokens ?? 4096
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Vertex AI error ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const rawText = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n") || "";
+  const parsed = JSON.parse(extractJsonFromText(rawText));
+
+  const rawScenarios = Array.isArray(parsed.scenarios) ? parsed.scenarios.slice(0, DEFAULT_SCENARIO_COUNT) : [];
+  if (rawScenarios.length === 0) {
+    throw new Error("Vertex AI returned no scenarios");
+  }
+
+  while (rawScenarios.length < DEFAULT_SCENARIO_COUNT) {
+    rawScenarios.push({});
+  }
+
+  return {
+    name: cleanText(parsed.name, playable?.name || countryName),
+    flag: cleanText(parsed.flag, playable?.flag || "🌍"),
+    scenarios: rawScenarios.map((scenario, i) => normalizeScenario(scenario, i, countryName))
+  };
+}
+
 /* ═══════════════════════════════════════════════════════════
    GAME  —  start / render / choice / outcome / next / end
    ═══════════════════════════════════════════════════════════ */
 
-function startGame(countryCode) {
+async function startGame(countryCode) {
   state.country       = countryCode;
   state.scenarioIndex = 0;
   state.stats         = { safety: 50, confidence: 50, cultural: 50, budget: 50 };
+  state.countryContent = null;
 
-  const country = SCENARIOS[countryCode];
-  document.getElementById("destination-flag").textContent = country.flag;
-  document.getElementById("destination-name").textContent = country.name;
+  const fallbackCountry = SCENARIOS[countryCode];
+  document.getElementById("destination-flag").textContent = fallbackCountry.flag;
+  document.getElementById("destination-name").textContent = fallbackCountry.name;
 
   updateStatBars();
   showScreen("game-screen");
+
+  document.getElementById("scenario-num").textContent = "…";
+  document.getElementById("scenario-title").textContent = "Personalizing your journey...";
+  document.getElementById("scenario-question").textContent = "Creating travel scenarios tailored to this destination.";
+  document.getElementById("choices-container").innerHTML = "";
+  document.getElementById("outcome-panel").classList.add("hidden");
+
+  try {
+    state.countryContent = await fetchVertexCountryContent(countryCode);
+  } catch (error) {
+    console.warn("Falling back to local scenarios", error);
+  }
+
+  if (!state.countryContent) state.countryContent = fallbackCountry;
+
+  document.getElementById("destination-flag").textContent = state.countryContent.flag;
+  document.getElementById("destination-name").textContent = state.countryContent.name;
   renderScenario();
 }
 
 /* ── Render the current scenario ───────────────────────── */
 function renderScenario() {
-  const scenario = SCENARIOS[state.country].scenarios[state.scenarioIndex];
+  const countryContent = getActiveCountryContent();
+  const scenario = countryContent.scenarios[state.scenarioIndex];
 
   document.getElementById("scenario-num").textContent = state.scenarioIndex + 1;
   document.getElementById("scenario-title").textContent    = scenario.title;
@@ -221,7 +371,8 @@ function renderScenario() {
 
 /* ── Handle a player's choice ──────────────────────────── */
 function handleChoice(index) {
-  const option = SCENARIOS[state.country].scenarios[state.scenarioIndex].options[index];
+  const countryContent = getActiveCountryContent();
+  const option = countryContent.scenarios[state.scenarioIndex].options[index];
 
   /* Apply stat effects */
   const fx = option.effects;
@@ -269,7 +420,7 @@ function showOutcome(option) {
 /* ── Advance to next scenario or end ───────────────────── */
 function advanceScenario() {
   state.scenarioIndex++;
-  const total = SCENARIOS[state.country].scenarios.length;
+  const total = getActiveCountryContent().scenarios.length;
   if (state.scenarioIndex >= total) {
     showResults();
   } else {
