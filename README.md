@@ -47,6 +47,37 @@ npx serve .
 
 ---
 
+
+## Vertex AI personalization (optional)
+
+The app can generate country-specific scenarios from Vertex AI at runtime.
+If Vertex config is missing or the request fails, Herizon automatically falls
+back to the local `scenarios.js` data.
+
+Add this block in `index.html` **before** `app.js`:
+
+```html
+<script>
+  window.HERIZON_VERTEX_CONFIG = {
+    projectId: "YOUR_GCP_PROJECT",
+    location: "us-central1",
+    model: "gemini-1.5-flash",
+    accessToken: "YOUR_SHORT_LIVED_OAUTH_BEARER_TOKEN"
+    // optional:
+    // endpoint: "https://...custom-endpoint...",
+    // temperature: 0.8,
+    // maxOutputTokens: 4096
+  };
+</script>
+```
+
+Notes:
+- `accessToken` should come from your backend/auth layer (never hardcode a
+  long-lived credential in production).
+- The model is prompted to return strict JSON with 4 scenarios and 4 options
+  each, including stat effects (`safety`, `confidence`, `cultural`, `budget`).
+- Keep a backend proxy for production so credentials are protected.
+
 ## How to Play
 
 1. **Choose a destination** by clicking one of the three highlighted (pink)
