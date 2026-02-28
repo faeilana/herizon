@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Herizon — Women's Travel Simulator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════════════════════════ MAP SCREEN ════════════════════════════ -->
+  <div id="map-screen" class="screen active">
+    <header>
+      <h1>Herizon</h1>
+      <p class="tagline">Traveling smart isn't about fear — it's about informed freedom.</p>
+    </header>
+
+    <div class="map-intro">
+      <h2>Choose Your Destination</h2>
+      <p>Hover to explore · Click a <span class="highlight-text">highlighted country</span> to begin your adventure</p>
+    </div>
+
+    <div id="map-container">
+      <svg id="world-map"></svg>
+      <div id="tooltip" class="tooltip hidden"></div>
+    </div>
+
+    <div class="legend">
+      <span class="legend-item playable">Playable destinations</span>
+      <span class="legend-item non-playable">Coming soon</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════ GAME SCREEN ════════════════════════════ -->
+  <div id="game-screen" class="screen">
+    <div class="game-header">
+      <button id="back-btn" class="btn-back">← Map</button>
+      <div class="destination-info">
+        <span id="destination-flag">🗾</span>
+        <h2 id="destination-name">Japan</h2>
+      </div>
+      <div class="scenario-progress">
+        Scenario <span id="scenario-num">1</span> of 4
+      </div>
+    </div>
+
+    <div class="stats-panel">
+      <div class="stat" id="stat-safety">
+        <span class="stat-label">Safety</span>
+        <div class="stat-bar"><div class="stat-fill" style="width:50%"></div></div>
+      </div>
+      <div class="stat" id="stat-confidence">
+        <span class="stat-label">Confidence</span>
+        <div class="stat-bar"><div class="stat-fill" style="width:50%"></div></div>
+      </div>
+      <div class="stat" id="stat-cultural">
+        <span class="stat-label">Cultural Awareness</span>
+        <div class="stat-bar"><div class="stat-fill" style="width:50%"></div></div>
+      </div>
+      <div class="stat" id="stat-budget">
+        <span class="stat-label">Budget</span>
+        <div class="stat-bar"><div class="stat-fill" style="width:50%"></div></div>
+      </div>
+    </div>
+
+    <div class="game-body">
+      <div id="scenario-panel">
+        <div class="scenario-question">
+          <h3 id="scenario-title">Scenario Title</h3>
+          <p id="scenario-question">Question text goes here.</p>
+        </div>
+        <div id="choices-container" class="choices"></div>
+      </div>
+
+      <div id="outcome-panel" class="hidden">
+        <div class="outcome-content">
+          <h3 class="outcome-heading">What Happened</h3>
+          <p id="outcome-summary"></p>
+          <div class="outcome-detail">
+            <p class="why-matters"><strong>Why this matters for women travelers:</strong> <span id="outcome-why"></span></p>
+            <p class="tip"><strong>Practical tip:</strong> <span id="outcome-tip"></span></p>
+          </div>
+          <button id="continue-btn" class="btn-primary">Continue →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════ RESULTS SCREEN ═══════════════════════════ -->
+  <div id="results-screen" class="screen">
+    <div class="results-content">
+      <h2 class="results-title">Journey Complete!</h2>
+
+      <div id="persona-card">
+        <div class="persona-icon" id="persona-icon">🧭</div>
+        <h3 id="persona-title">The Balanced Navigator</h3>
+        <p id="persona-description"></p>
+      </div>
+
+      <div class="final-stats">
+        <h4>Your Travel Profile</h4>
+        <div class="final-stat">
+          <span class="final-stat-label">Safety</span>
+          <div class="stat-bar"><div class="stat-fill" id="final-safety" style="width:50%"></div></div>
+          <span class="stat-value" id="final-safety-val">50</span>
+        </div>
+        <div class="final-stat">
+          <span class="final-stat-label">Confidence</span>
+          <div class="stat-bar"><div class="stat-fill" id="final-confidence" style="width:50%"></div></div>
+          <span class="stat-value" id="final-confidence-val">50</span>
+        </div>
+        <div class="final-stat">
+          <span class="final-stat-label">Cultural Awareness</span>
+          <div class="stat-bar"><div class="stat-fill" id="final-cultural" style="width:50%"></div></div>
+          <span class="stat-value" id="final-cultural-val">50</span>
+        </div>
+        <div class="final-stat">
+          <span class="final-stat-label">Budget</span>
+          <div class="stat-bar"><div class="stat-fill" id="final-budget" style="width:50%"></div></div>
+          <span class="stat-value" id="final-budget-val">50</span>
+        </div>
+      </div>
+
+      <p class="empowerment-message">"Traveling smart isn't about fear — it's about informed freedom."</p>
+      <button id="replay-btn" class="btn-primary">Explore Another Destination</button>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson@3/dist/topojson.min.js"></script>
+<script src="scenarios.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
