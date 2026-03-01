@@ -40,11 +40,15 @@ const PLAYABLE = {
    76: { code: "BRA", name: "Brazil", flag: "🇧🇷" }
 };
 
+/* ── LLM feature flag ─────────────────────────────────────── */
+const LLM_ENABLED = true; // set false to always use static scenarios.js
+
 /* ── Game state ───────────────────────────────────────────── */
 let state = {
-  country:       null,
-  scenarioIndex: 0,
-  stats: { safety: 50, confidence: 50, cultural: 50, budget: 50 }
+  country:          null,
+  scenarioIndex:    0,
+  stats:            { safety: 50, confidence: 50, cultural: 50, budget: 50 },
+  loadedScenarios:  []   // cache of scenario objects for current playthrough
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -149,6 +153,11 @@ function onCountryClick(event, d) {
   const id = +d.id;
   if (PLAYABLE[id]) {
     startGame(PLAYABLE[id].code);
+  } else if (LLM_ENABLED && COUNTRY_NAMES[id]) {
+    // With LLM enabled, any mapped country can generate scenarios dynamically
+    const name       = COUNTRY_NAMES[id];
+    const pseudoCode = name.toUpperCase().replace(/\s/g, '').slice(0, 3);
+    startGame(pseudoCode, name);
   } else {
     const tt = document.getElementById("tooltip");
     const name = COUNTRY_NAMES[id] || "This destination";
@@ -181,25 +190,35 @@ function showMapError() {
    GAME  —  start / render / choice / outcome / next / end
    ═══════════════════════════════════════════════════════════ */
 
-function startGame(countryCode) {
-  state.country       = countryCode;
-  state.scenarioIndex = 0;
-  state.stats         = { safety: 50, confidence: 50, cultural: 50, budget: 50 };
+async function startGame(countryCode, overrideName = null) {
+  state.country         = countryCode;
+  state.scenarioIndex   = 0;
+  state.loadedScenarios = [];
+  state.stats           = { safety: 50, confidence: 50, cultural: 50, budget: 50 };
 
-  const country = SCENARIOS[countryCode];
-  document.getElementById("destination-flag").textContent = country.flag;
-  document.getElementById("destination-name").textContent = country.name;
+  // Support both static countries (have a SCENARIOS entry) and LLM-only countries
+  const countryData = SCENARIOS[countryCode];
+  const countryName = overrideName || countryData?.name || countryCode;
+  const flag        = countryData?.flag || '🌍';
+
+  document.getElementById("destination-flag").textContent = flag;
+  document.getElementById("destination-name").textContent = countryName;
 
   updateStatBars();
   showScreen("game-screen");
-  renderScenario();
+  await renderScenario(countryName);
 }
 
 /* ── Render the current scenario ───────────────────────── */
-function renderScenario() {
-  const scenario = SCENARIOS[state.country].scenarios[state.scenarioIndex];
+async function renderScenario(countryName) {
+  // Use cached scenario if already loaded for this index
+  let scenario = state.loadedScenarios[state.scenarioIndex];
+  if (!scenario) {
+    scenario = await fetchScenario(countryName);
+    state.loadedScenarios[state.scenarioIndex] = scenario;
+  }
 
-  document.getElementById("scenario-num").textContent = state.scenarioIndex + 1;
+  document.getElementById("scenario-num").textContent      = state.scenarioIndex + 1;
   document.getElementById("scenario-title").textContent    = scenario.title;
   document.getElementById("scenario-question").textContent = scenario.question;
 
@@ -221,7 +240,7 @@ function renderScenario() {
 
 /* ── Handle a player's choice ──────────────────────────── */
 function handleChoice(index) {
-  const option = SCENARIOS[state.country].scenarios[state.scenarioIndex].options[index];
+  const option = state.loadedScenarios[state.scenarioIndex].options[index];
 
   /* Apply stat effects */
   const fx = option.effects;
@@ -267,16 +286,105 @@ function showOutcome(option) {
 }
 
 /* ── Advance to next scenario or end ───────────────────── */
-function advanceScenario() {
+async function advanceScenario() {
   state.scenarioIndex++;
-  const total = SCENARIOS[state.country].scenarios.length;
-  if (state.scenarioIndex >= total) {
+  if (state.scenarioIndex >= 7) {
     showResults();
   } else {
-    renderScenario();
+    const countryData = SCENARIOS[state.country];
+    const countryName = countryData?.name || state.country;
+    await renderScenario(countryName);
     document.getElementById("scenario-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   LLM SCENARIO FETCHING  (Vertex AI / Gemini via backend proxy)
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Fetch a scenario from the LLM backend or fall back ─── */
+async function fetchScenario(countryName) {
+  if (!LLM_ENABLED) return getStaticFallback();
+  showLoadingState();
+  try {
+    const resp = await fetch('/api/scenario', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        country:       state.country,
+        countryName:   countryName,
+        scenarioIndex: state.scenarioIndex,
+        stats:         state.stats
+      })
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.source === 'fallback' || !data.scenario) return getStaticFallback();
+    return data.scenario;
+  } catch (err) {
+    console.warn('[Herizon] LLM fetch failed, using static fallback:', err.message);
+    return getStaticFallback();
+  }
+}
+
+/* ── Return a static scenario as fallback ──────────────── */
+function getStaticFallback() {
+  const countryData = SCENARIOS[state.country];
+  if (countryData) {
+    const idx = state.scenarioIndex % countryData.scenarios.length;
+    return countryData.scenarios[idx];
+  }
+  return GENERIC_FALLBACK_SCENARIO;
+}
+
+/* ── Show loading spinner while awaiting LLM ───────────── */
+function showLoadingState() {
+  document.getElementById("choices-container").innerHTML = `
+    <div class="loading-state" aria-live="polite" aria-busy="true">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">Preparing your scenario...</p>
+    </div>`;
+  document.getElementById("scenario-title").textContent    = "";
+  document.getElementById("scenario-question").textContent = "";
+  document.getElementById("scenario-panel").classList.remove("hidden");
+  document.getElementById("outcome-panel").classList.add("hidden");
+}
+
+/* ── Generic fallback scenario for LLM-only countries ─── */
+const GENERIC_FALLBACK_SCENARIO = {
+  title: "Navigating the Unfamiliar",
+  question: "You've arrived in an unfamiliar part of the city and feel uncertain about your surroundings. What do you do?",
+  options: [
+    {
+      text: "Step into the nearest well-lit café or shop to reorient",
+      effects: { safety: 15, confidence: 10, cultural: 5, budget: -5 },
+      outcome: "You gather your bearings safely. A barista helpfully points you in the right direction.",
+      why: "Ducking into a staffed public space is one of the most effective de-escalation moves for any traveler.",
+      tip: "Hotels, cafés, and shops are always valid safe harbors — use them freely."
+    },
+    {
+      text: "Open your maps app and plan a clear route before moving",
+      effects: { safety: 10, confidence: 15, cultural: 5, budget: 0 },
+      outcome: "A few minutes of planning reveals a safe, direct route. Confidence restored.",
+      why: "A moment of digital navigation is always worth more than moving blindly in the wrong direction.",
+      tip: "Download offline maps for every destination before you leave home — they work with no signal."
+    },
+    {
+      text: "Ask a nearby woman or family for help",
+      effects: { safety: 10, confidence: 10, cultural: 15, budget: 0 },
+      outcome: "They are warm and helpful. You find your way and exchange a few kind words.",
+      why: "Asking local women or families for directions is consistently the safest choice in any country.",
+      tip: "A smile, the destination name, and a questioning look work in any language."
+    },
+    {
+      text: "Keep walking quickly without a plan, hoping you'll recognize something",
+      effects: { safety: -10, confidence: -10, cultural: 0, budget: 0 },
+      outcome: "You end up more lost and more anxious than when you started.",
+      why: "Moving without a plan when disoriented amplifies risk. Pause, orient, then move with purpose.",
+      tip: "Always know the name and address of your accommodation before leaving it."
+    }
+  ]
+};
 
 /* ═══════════════════════════════════════════════════════════
    RESULTS  &  PERSONA
@@ -359,6 +467,107 @@ document.getElementById("back-btn").addEventListener("click", () => {
   if (confirm("Return to the map? Your current progress will be lost.")) {
     showScreen("map-screen");
   }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   SHARE EXPERIENCE MODAL
+   ═══════════════════════════════════════════════════════════ */
+
+function openShareModal(prefillCountry = '') {
+  const overlay = document.getElementById('share-modal-overlay');
+  overlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden'; // prevent background scroll
+  resetShareForm();
+  if (prefillCountry) {
+    document.getElementById('exp-country').value = prefillCountry;
+  }
+  document.getElementById('exp-country').focus();
+}
+
+function closeShareModal() {
+  document.getElementById('share-modal-overlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function resetShareForm() {
+  document.getElementById('share-experience-form').reset();
+  document.getElementById('exp-char-count').textContent = '0';
+  document.getElementById('share-form-error').classList.add('hidden');
+  document.getElementById('share-form-success').classList.add('hidden');
+  const btn = document.getElementById('share-submit-btn');
+  btn.disabled    = false;
+  btn.textContent = 'Submit Experience';
+}
+
+async function submitExperience(e) {
+  e.preventDefault();
+  const country    = document.getElementById('exp-country').value.trim();
+  const title      = document.getElementById('exp-title').value.trim();
+  const experience = document.getElementById('exp-text').value.trim();
+  const errorEl    = document.getElementById('share-form-error');
+  const successEl  = document.getElementById('share-form-success');
+  const submitBtn  = document.getElementById('share-submit-btn');
+
+  errorEl.classList.add('hidden');
+
+  if (!country) {
+    errorEl.textContent = 'Please enter a country.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (experience.length < 20) {
+    errorEl.textContent = 'Please write at least 20 characters about your experience.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  submitBtn.disabled    = true;
+  submitBtn.textContent = 'Submitting…';
+
+  try {
+    const resp = await fetch('/api/experiences', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country, countryName: country, title, experience })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Submission failed');
+
+    successEl.classList.remove('hidden');
+    document.getElementById('share-experience-form').reset();
+    document.getElementById('exp-char-count').textContent = '0';
+    setTimeout(closeShareModal, 2500);
+
+  } catch (err) {
+    errorEl.textContent = 'Something went wrong. Please try again.';
+    errorEl.classList.remove('hidden');
+    submitBtn.disabled    = false;
+    submitBtn.textContent = 'Submit Experience';
+  }
+}
+
+/* ── Modal event wiring ─────────────────────────────────── */
+document.getElementById('share-story-btn').addEventListener('click', () => openShareModal());
+
+document.getElementById('results-share-btn').addEventListener('click', () => {
+  const countryData = SCENARIOS[state.country];
+  openShareModal(countryData?.name || state.country || '');
+});
+
+document.getElementById('modal-close-btn').addEventListener('click', closeShareModal);
+
+document.getElementById('share-modal-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeShareModal(); // click outside to close
+});
+
+document.getElementById('share-experience-form').addEventListener('submit', submitExperience);
+
+document.getElementById('exp-text').addEventListener('input', e => {
+  document.getElementById('exp-char-count').textContent = e.target.value.length;
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeShareModal();
 });
 
 /* ═══════════════════════════════════════════════════════════

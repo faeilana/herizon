@@ -1,6 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
    Herizon — Express Server + Vertex AI Proxy
-   Serves the static frontend and proxies /api/scenario to Gemini.
+   Serves the static frontend, proxies /api/scenario to Gemini,
+   and manages user experience submissions via RAG.
    ═══════════════════════════════════════════════════════════ */
 
 require('dotenv').config();
@@ -9,9 +10,10 @@ const express   = require('express');
 const cors      = require('cors');
 const rateLimit = require('express-rate-limit');
 const path      = require('path');
-const { VertexAI }        = require('@google-cloud/vertexai');
-const { SCENARIO_SCHEMA } = require('./schema');
-const { SYSTEM_PROMPT, buildUserPrompt } = require('./prompts');
+const { VertexAI }                    = require('@google-cloud/vertexai');
+const { SCENARIO_SCHEMA }             = require('./schema');
+const { SYSTEM_PROMPT, buildUserPrompt, TOPIC_ROTATION } = require('./prompts');
+const { saveExperience, retrieveExperiences }            = require('./rag');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -48,7 +50,18 @@ app.post('/api/scenario', async (req, res) => {
   }
 
   try {
-    const userPrompt = buildUserPrompt(countryName || country, scenarioIndex, stats);
+    // Determine current topic for RAG query
+    const topic = TOPIC_ROTATION[scenarioIndex % 7];
+
+    // Retrieve relevant user experiences (non-fatal if it fails)
+    let retrievedExperiences = [];
+    try {
+      retrievedExperiences = await retrieveExperiences(countryName || country, topic, 3);
+    } catch (ragErr) {
+      console.warn('[RAG retrieve warning]', ragErr.message);
+    }
+
+    const userPrompt = buildUserPrompt(countryName || country, scenarioIndex, stats, retrievedExperiences);
     const result     = await model.generateContent(userPrompt);
     const text       = result.response.candidates[0].content.parts[0].text;
     const scenario   = JSON.parse(text);
@@ -61,6 +74,31 @@ app.post('/api/scenario', async (req, res) => {
     console.error('[Vertex AI error]', err.message);
     // Return fallback signal — frontend will substitute static scenario data
     return res.json({ scenario: null, source: 'fallback', reason: err.code || 'vertex_error' });
+  }
+});
+
+/* ── POST /api/experiences — store a user travel experience  */
+app.post('/api/experiences', async (req, res) => {
+  const { country, countryName, title, experience } = req.body;
+
+  if (!country || !experience || experience.trim().length < 20) {
+    return res.status(400).json({ error: 'country and experience (min 20 characters) are required' });
+  }
+  if (experience.length > 3000) {
+    return res.status(400).json({ error: 'experience must be 3000 characters or fewer' });
+  }
+
+  try {
+    const id = await saveExperience({
+      country,
+      countryName: countryName || country,
+      title:       title?.trim() || '',
+      experience:  experience.trim()
+    });
+    return res.json({ success: true, id });
+  } catch (err) {
+    console.error('[RAG save error]', err.message);
+    return res.status(500).json({ error: 'Failed to save experience. Please try again.' });
   }
 });
 

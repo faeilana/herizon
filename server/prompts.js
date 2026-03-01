@@ -37,12 +37,13 @@ const TOPIC_ROTATION = [
 
 /**
  * Build the user-turn prompt for a scenario request.
- * @param {string} countryName  - Human-readable country name (e.g. "Japan")
- * @param {number} scenarioIndex - 0-6, position in the playthrough
- * @param {object} stats         - Current player stats {safety, confidence, cultural, budget}
+ * @param {string}   countryName          - Human-readable country name (e.g. "Japan")
+ * @param {number}   scenarioIndex        - 0-6, position in the playthrough
+ * @param {object}   stats                - Current player stats {safety, confidence, cultural, budget}
+ * @param {object[]} retrievedExperiences - RAG results: real traveler stories to ground the scenario
  * @returns {string}
  */
-function buildUserPrompt(countryName, scenarioIndex, stats) {
+function buildUserPrompt(countryName, scenarioIndex, stats, retrievedExperiences = []) {
   const avg = (stats.safety + stats.confidence + stats.cultural + stats.budget) / 4;
   const difficulty = avg < 40 ? 'LOW' : avg > 65 ? 'HIGH' : 'MEDIUM';
   const topic = TOPIC_ROTATION[scenarioIndex % 7];
@@ -53,11 +54,20 @@ function buildUserPrompt(countryName, scenarioIndex, stats) {
     ? 'Present a nuanced, complex dilemma where even good options have tradeoffs — reward the experienced player with depth.'
     : 'Balance education with genuine choice.';
 
+  // Build RAG context block from retrieved user experiences
+  let experienceContext = '';
+  if (retrievedExperiences.length > 0) {
+    const formatted = retrievedExperiences
+      .map((e, i) => `Experience ${i + 1}${e.title && e.title !== 'Untitled' ? ' — ' + e.title : ''}:\n"${e.experience}"`)
+      .join('\n\n');
+    experienceContext = `\nREAL TRAVELER EXPERIENCES (use as grounding context — draw on specific details, feelings, and lessons to make the scenario more authentic):\n${formatted}\n`;
+  }
+
   return `Generate a travel scenario for a solo woman traveler in ${countryName}.
 
 SCENARIO FOCUS: ${topic}
 SCENARIO NUMBER: ${scenarioIndex + 1} of 7 in this playthrough
-
+${experienceContext}
 PLAYER CONTEXT:
 - Current stats: Safety ${stats.safety}, Confidence ${stats.confidence}, Cultural ${stats.cultural}, Budget ${stats.budget}
 - Difficulty level: ${difficulty}
@@ -67,4 +77,4 @@ Difficulty guidance: ${difficultyGuidance}
 Set the scenario in a specific, named location within ${countryName} (a real neighborhood, transit system, landmark, or type of venue).`;
 }
 
-module.exports = { SYSTEM_PROMPT, buildUserPrompt };
+module.exports = { SYSTEM_PROMPT, buildUserPrompt, TOPIC_ROTATION };
